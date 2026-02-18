@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>KB Hall - WebHID Bridge</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #161616;
+        color: #ccc;
+        font-family: system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 20px;
+      }
+      h1 {
+        color: #6af;
+        margin-bottom: 8px;
+        font-size: 24px;
+      }
+      .sub {
+        color: #555;
+        margin-bottom: 32px;
+        font-size: 13px;
+      }
+      button {
+        background: #2a6af0;
+        color: #fff;
+        border: none;
+        padding: 16px 48px;
+        border-radius: 10px;
+        font-size: 17px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      button:hover {
+        background: #3b7bff;
+        transform: scale(1.02);
+      }
+      button:disabled {
+        background: #333;
+        cursor: default;
+        color: #666;
+        transform: none;
+      }
+      #status {
+        margin-top: 20px;
+        font-size: 14px;
+        min-height: 22px;
+        transition: color 0.3s;
+      }
+      #stats {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>KB Hall</h1>
+    <p class="sub">Analog input bridge</p>
+    <button id="btn" onclick="go()">Connect Keyboard</button>
+    <div id="status"></div>
+    <div id="stats"></div>
+    <script>
+      const VID = __VID__,
+        PID = __PID__,
+        WS_PORT = __WS_PORT__;
+      let ws,
+        rpt = 0,
+        rawDev,
+        outId = 0;
+      const $ = (id) => document.getElementById(id);
+
+      (function wsConnect() {
+        ws = new WebSocket("ws://127.0.0.1:" + WS_PORT);
+        ws.binaryType = "arraybuffer";
+        ws.onopen = () => {
+          $("status").textContent = "Ready - click Connect";
+          $("status").style.color = "#8f8";
+        };
+        ws.onclose = () => setTimeout(wsConnect, 800);
+        ws.onerror = () => {};
+      })();
+
+      function wsSend(data) {
+        if (!ws || ws.readyState !== 1) return;
+        const m = new Uint8Array(2 + data.length);
+        m[0] = 0x03;
+        m[1] = 0;
+        m.set(data, 2);
+        ws.send(m.buffer);
+      }
+
+      function onInput(ev) {
+        const d = new Uint8Array(ev.data.buffer);
+        if (d[0] === 0xa0) {
+          rpt++;
+          wsSend(d);
+        }
+      }
+
+      async function go() {
+        $("btn").disabled = true;
+        $("status").textContent = "Select Ace 60 Pro in the picker...";
+        $("status").style.color = "#ff0";
+        try {
+          const devs = await navigator.hid.requestDevice({
+            filters: [{ vendorId: VID, productId: PID }],
+          });
+          if (!devs.length) {
+            $("btn").disabled = false;
+            return;
+          }
+
+          for (const d of devs) {
+            if (!d.opened) await d.open();
+            d.addEventListener("inputreport", onInput);
+            for (const c of d.collections) {
+              const outs = (c.outputReports || []).map((r) => r.reportId);
+              if (outs.length > 0) {
+                rawDev = d;
+                outId = outs[0];
+              }
+            }
+          }
+
+          for (const d of await navigator.hid.getDevices()) {
+            if (d.vendorId !== VID || d.productId !== PID) continue;
+            if (devs.includes(d)) continue;
+            if (!d.opened) await d.open();
+            d.addEventListener("inputreport", onInput);
+            if (!rawDev)
+              for (const c of d.collections) {
+                const outs = (c.outputReports || []).map((r) => r.reportId);
+                if (outs.length > 0) {
+                  rawDev = d;
+                  outId = outs[0];
+                }
+              }
+          }
+
+          if (rawDev) {
+            for (const cmd of [0xa8, 0xa0]) {
+              const p = new Uint8Array(64);
+              p[0] = 0x55;
+              p[1] = cmd;
+              try { await rawDev.sendReport(outId, p); } catch (e) {}
+            }
+          }
+
+          $("btn").textContent = "Connected";
+          $("status").textContent =
+            "Analog active - press keys on your keyboard!";
+          $("status").style.color = "#8f8";
+
+          setInterval(() => {
+            $("stats").textContent =
+              rpt > 0 ? rpt + " analog reports" : "Waiting for key data...";
+          }, 500);
+        } catch (e) {
+          $("status").textContent = "Error: " + e;
+          $("status").style.color = "#f88";
+          $("btn").disabled = false;
+          $("btn").textContent = "Retry";
+        }
+      }
+    </script>
+  </body>
+</html>
