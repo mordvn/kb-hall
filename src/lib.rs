@@ -132,6 +132,108 @@ fn bridge_html(ws_port: u16, vid: u16, pid: u16) -> String {
         .replace("__PID__", &format!("0x{:04X}", pid))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_keyboard_initial_state() {
+        let kb = AnalogKeyboard::new(0x1234, 0x5678);
+        assert_eq!(kb.vid(), 0x1234);
+        assert_eq!(kb.pid(), 0x5678);
+        assert!(!kb.is_active());
+        assert_eq!(kb.status(), "Starting...");
+        assert_eq!(kb.values(), [0.0f32; 256]);
+    }
+
+    #[test]
+    fn set_and_read_values() {
+        let kb = AnalogKeyboard::new(0, 0);
+        let mut vals = [0.0f32; 256];
+        vals[0x04] = 0.75;
+        vals[0x2C] = 1.0;
+
+        kb.set_values(&vals);
+
+        assert_eq!(kb.value(0x04), 0.75);
+        assert_eq!(kb.value(0x2C), 1.0);
+        assert_eq!(kb.value(0x00), 0.0);
+        assert_eq!(kb.values()[0x04], 0.75);
+    }
+
+    #[test]
+    fn set_values_overwrites_completely() {
+        let kb = AnalogKeyboard::new(0, 0);
+        let mut v1 = [0.0f32; 256];
+        v1[10] = 1.0;
+        kb.set_values(&v1);
+
+        let v2 = [0.0f32; 256];
+        kb.set_values(&v2);
+
+        assert_eq!(kb.value(10), 0.0);
+    }
+
+    #[test]
+    fn parse_analog_valid_keypress() {
+        let kb = AnalogKeyboard::new(0, 0);
+        // report id=0xA0, padding, padding, key_idx=0x04, raw_hi=0x03, raw_lo=0x00 → raw=768
+        let data = [0xA0, 0x00, 0x00, 0x04, 0x03, 0x00];
+        parse_analog_input(&data, &kb);
+
+        let v = kb.value(0x04);
+        let expected = (768.0 - ANALOG_DEADZONE as f32) / ANALOG_MAX;
+        assert!(
+            (v - expected).abs() < 0.001,
+            "got {v}, expected ~{expected}"
+        );
+    }
+
+    #[test]
+    fn parse_analog_below_deadzone_is_zero() {
+        let kb = AnalogKeyboard::new(0, 0);
+        // raw = 5, below ANALOG_DEADZONE (10)
+        let data = [0xA0, 0x00, 0x00, 0x04, 0x00, 0x05];
+        parse_analog_input(&data, &kb);
+        assert_eq!(kb.value(0x04), 0.0);
+    }
+
+    #[test]
+    fn parse_analog_at_deadzone_is_zero() {
+        let kb = AnalogKeyboard::new(0, 0);
+        // raw = ANALOG_DEADZONE exactly
+        let data = [0xA0, 0x00, 0x00, 0x04, 0x00, ANALOG_DEADZONE as u8];
+        parse_analog_input(&data, &kb);
+        assert_eq!(kb.value(0x04), 0.0);
+    }
+
+    #[test]
+    fn parse_analog_clamped_to_one() {
+        let kb = AnalogKeyboard::new(0, 0);
+        // raw = 0xFFFF = 65535, way above ANALOG_MAX → should clamp to 1.0
+        let data = [0xA0, 0x00, 0x00, 0x10, 0xFF, 0xFF];
+        parse_analog_input(&data, &kb);
+        assert_eq!(kb.value(0x10), 1.0);
+    }
+
+    #[test]
+    fn parse_analog_ignores_wrong_report_id() {
+        let kb = AnalogKeyboard::new(0, 0);
+        let data = [0x01, 0x00, 0x00, 0x04, 0x03, 0x00];
+        parse_analog_input(&data, &kb);
+        assert_eq!(kb.value(0x04), 0.0);
+    }
+
+    #[test]
+    fn parse_analog_ignores_short_data() {
+        let kb = AnalogKeyboard::new(0, 0);
+        let data = [0xA0, 0x00, 0x00];
+        parse_analog_input(&data, &kb);
+        // no crash, values stay zero
+        assert_eq!(kb.values(), [0.0f32; 256]);
+    }
+}
+
 fn start_webhid_bridge(kb: &AnalogKeyboard) {
     use std::net::TcpListener;
 
