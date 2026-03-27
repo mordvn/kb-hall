@@ -1,4 +1,4 @@
-<h1 align="center">KB Hall</h1>
+<h1>KB Hall</h1>
 <p align="center">Analog keyboard visualizer for MCHOSE Magnetic keyboard.<br>Reads per-key analog values (0–100% press depth) via WebHID and renders a real-time heatmap in Bevy.</p>
 <p align="center"><img src="media/demo.gif" alt="demo" width="700"></p>
 
